@@ -1,20 +1,37 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"  
+# os.environ["CUDA_VISIBLE_DEVICES"] = "0"  
 from torchvision import transforms
 from torchvision import datasets
 from torch.utils.data import DataLoader
 from torchvision import models
 from torch.optim import lr_scheduler
+from torch.utils.tensorboard import SummaryWriter
 from torch import optim
 import time
 import torch
 import copy
 import torch.nn as nn
+from tqdm import tqdm
 
 
 # cfg
-traindir = "data/train"
-validdir = "data/valid"
+# traindir = "data/train"
+# validdir = "data/valid"
+traindir = "/home/cyy/4T/project/roi_delivery/libs/pig_up_down/data/train"
+validdir = "/home/cyy/4T/project/roi_delivery/libs/pig_up_down/data/valid"
+
+# save weights
+save_weight = "weights"
+os.makedirs(save_weight,exist_ok=True)
+
+# save log
+save_log = "logs"
+os.makedirs(save_log,exist_ok=True)
+tb_writer = SummaryWriter(log_dir=save_log)
+
+# class num
+class_num = 3
+
 batch_size = 32
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -61,7 +78,7 @@ print(dataset_sizes,class_names)
 
 model_ft = models.resnet18(pretrained=True)
 num_ftrs = model_ft.fc.in_features
-model_ft.fc = nn.Linear(num_ftrs, 2)
+model_ft.fc = nn.Linear(num_ftrs, class_num)
 model_ft.to(device)
 
 criterion = nn.CrossEntropyLoss()
@@ -89,7 +106,6 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=10):
         # Each epoch has a training and validation phase
         for phase in ['train', 'valid']:
             if phase == 'train':
-                scheduler.step()
                 model.train()  # Set model to training mode
             else:
                 model.eval()  # Set model to evaluate mode
@@ -98,7 +114,7 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=10):
             running_corrects = 0
 
             # Iterate over data.
-            for inputs, labels in dataloaders[phase]:
+            for inputs, labels in tqdm(dataloaders[phase],desc=phase):
                 # print(inputs.shape)
 
                 # wrap them in Variable
@@ -120,6 +136,7 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=10):
                 if phase == 'train':
                     loss.backward()
                     optimizer.step()
+                    scheduler.step()
 
                 # statistics
                 running_loss += loss.data.item() * inputs.size(0)
@@ -137,10 +154,16 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=10):
             if phase == 'valid' and epoch_acc > best_acc:
                 best_acc = epoch_acc
                 best_model_wts = copy.deepcopy(model.state_dict())
+            if phase == "train":
+                tb_writer.add_scalar('train/loss',epoch_loss,epoch+1)
+                tb_writer.add_scalar('train/acc',epoch_acc,epoch+1)
+            elif phase == "valid":
+                tb_writer.add_scalar('valid/loss',epoch_loss,epoch+1)
+                tb_writer.add_scalar('valid/acc',epoch_acc,epoch+1)
 
         print()
         if epoch % 2 == 0:
-            torch.save(model.state_dict(),f"weights/model_{epoch}.pth")
+            torch.save(model.state_dict(),f"{save_weight}/model_{epoch}.pth")
 
     time_elapsed = time.time() - since
     print('Training complete in {:.0f}m {:.0f}s'.format(
@@ -149,6 +172,7 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=10):
 
     # load best model weights
     model.load_state_dict(best_model_wts)
+    tb_writer.close()
     return model
 
 model_ft = train_model(model_ft, criterion, optimizer_ft, exp_lr_scheduler,num_epochs=101)
